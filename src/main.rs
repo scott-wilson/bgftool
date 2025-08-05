@@ -1,5 +1,6 @@
 use clap::Parser;
 use color_eyre::eyre::Result;
+use rayon::prelude::*;
 
 #[derive(Debug, clap::Parser)]
 #[command(version, about, long_about=None)]
@@ -40,7 +41,7 @@ fn main() -> Result<()> {
         Commands::Compile {
             input_conf,
             output_bgf,
-        } => todo!(),
+        } => compile(&input_conf, &output_bgf)?,
     }
 
     Ok(())
@@ -69,6 +70,57 @@ fn decompile(
 
     let conf_path = output_dir.join(format!("{name}.json"));
     serde_json::to_writer_pretty(std::fs::File::create(&conf_path)?, &conf)?;
+
+    Ok(())
+}
+
+fn compile(input_conf: &std::path::Path, output_bgf: &std::path::Path) -> Result<()> {
+    let input_conf = input_conf.canonicalize()?;
+    let input_conf_dir = input_conf.parent().unwrap();
+    let conf: bgftool::conf::Bgf = serde_json::from_reader(std::fs::File::open(&input_conf)?)?;
+
+    let bitmap_results = conf
+        .bitmaps
+        .into_par_iter()
+        .map(|bitmap_conf| -> Result<bgftool::bgf::Bitmap> {
+            let bitmap_path = input_conf_dir.join(bitmap_conf.path);
+            let options = bgftool::bgf::BitmapImageOptions {
+                compression: bitmap_conf.compression,
+                transparency_clip: 0.5,
+            };
+            let mut bitmap = bgftool::bgf::Bitmap::from_image(bitmap_path, &options)?;
+            bitmap.offset = bitmap_conf.offset;
+            bitmap.hotspots = bitmap_conf
+                .hotspots
+                .into_iter()
+                .map(|h| bgftool::bgf::Hotspot {
+                    number: h.number,
+                    position: bgftool::bgf::Point(h.position.0, h.position.1),
+                })
+                .collect();
+
+            Ok(bitmap)
+        })
+        .collect::<Vec<_>>();
+    let mut bitmaps = Vec::with_capacity(bitmap_results.len());
+
+    for bitmap_result in bitmap_results {
+        bitmaps.push(bitmap_result?);
+    }
+
+    let bgf = bgftool::bgf::Bgf {
+        version: conf.version,
+        name: conf.name,
+        bitmaps: bitmaps,
+        index_groups: conf
+            .index_groups
+            .into_iter()
+            .map(|g| bgftool::bgf::Group { indices: g.indices })
+            .collect(),
+        max_indices: conf.max_indices,
+        shrink_factor: conf.shrink_factor,
+    };
+    bgf.write(std::fs::File::create(output_bgf)?)?;
 
     Ok(())
 }

@@ -1,6 +1,8 @@
 use std::{io::prelude::*, str::FromStr};
 
-use color_eyre::eyre::{self, Result};
+use color_eyre::eyre::{self, Ok, Result};
+use image::{Pixel, imageops::ColorMap};
+use rayon::prelude::*;
 
 const MAGIC_NUMBER: &[u8] = b"BGF\x11";
 const CURRENT_BGF_VERSION: i32 = 10;
@@ -305,6 +307,12 @@ impl Hotspot {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct BitmapImageOptions {
+    pub compression: crate::conf::BitmapDataCompression,
+    pub transparency_clip: f32,
+}
+
 #[derive(Debug)]
 pub enum BitmapData {
     Uncompressed(Vec<u8>),
@@ -453,6 +461,74 @@ impl Bitmap {
         img.save(path)?;
 
         Ok(())
+    }
+
+    pub fn from_image<P: AsRef<std::path::Path>>(
+        path: P,
+        options: &BitmapImageOptions,
+    ) -> Result<Self> {
+        let img = image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()?;
+        let width = img.width();
+        let height = img.height();
+        let palette = Palette::new();
+        let (transparent_index, transparent_color) = palette.transparent_color();
+
+        let buf = match img {
+            image::DynamicImage::ImageRgb8(image_buffer) => {
+                let mut buf =
+                    Vec::with_capacity((image_buffer.width() * image_buffer.height()) as usize);
+
+                for pixel in image_buffer.pixels() {
+                    if *pixel == transparent_color {
+                        buf.push(transparent_index as u8);
+                    } else {
+                        let color_index = palette.index_of(&pixel.to_rgb());
+                        buf.push(color_index as u8);
+                    }
+                }
+
+                buf
+            }
+            image::DynamicImage::ImageRgba8(image_buffer) => {
+                let mut buf =
+                    Vec::with_capacity((image_buffer.width() * image_buffer.height()) as usize);
+
+                for pixel in image_buffer.pixels() {
+                    let a = pixel[3] as f32 / 255.0;
+
+                    if a < options.transparency_clip {
+                        buf.push(transparent_index as u8);
+                    } else {
+                        let color_index = palette.index_of(&pixel.to_rgb());
+                        buf.push(color_index as u8);
+                    }
+                }
+
+                buf
+            }
+            _ => return Err(eyre::eyre!("Unsupported image type.")),
+        };
+
+        let data = match options.compression {
+            crate::conf::BitmapDataCompression::Uncompressed => BitmapData::Uncompressed(buf),
+            crate::conf::BitmapDataCompression::ZlibCompressed => {
+                let buf = buf;
+
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+                encoder.write_all(&buf)?;
+                BitmapData::ZlibCompressed(encoder.finish()?)
+            }
+        };
+
+        Ok(Self {
+            size: (width as i32, height as i32),
+            offset: (0, 0),
+            hotspots: Vec::new(),
+            data,
+        })
     }
 }
 
@@ -614,5 +690,64 @@ impl Bgf {
         }
 
         Ok(())
+    }
+}
+
+pub struct Palette {
+    values: &'static [image::Rgb<u8>],
+}
+
+impl Palette {
+    pub fn new() -> Self {
+        static CACHED_PALETTE: std::sync::LazyLock<Vec<image::Rgb<u8>>> =
+            std::sync::LazyLock::new(|| PALETTE.iter().map(|v| image::Rgb(*v)).collect());
+
+        Self {
+            values: CACHED_PALETTE.as_ref(),
+        }
+    }
+
+    pub fn transparent_color(&self) -> (usize, image::Rgb<u8>) {
+        (254, image::Rgb([0, 255, 255]))
+    }
+
+    pub fn values(&self) -> &[image::Rgb<u8>] {
+        &self.values
+    }
+
+    fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
+        self.values
+            .par_iter()
+            .enumerate()
+            .filter(|i| i.0 != self.transparent_color().0) // Skip the transparent color
+            .min_by(|(_, a), (_, b)| {
+                let a = [a[0] as f32, a[1] as f32, a[2] as f32];
+                let b = [b[0] as f32, b[1] as f32, b[2] as f32];
+                let c = [color[0] as f32, color[1] as f32, color[2] as f32];
+
+                let aa =
+                    ((a[0] - c[0]).powi(2) + (a[1] - c[1]).powi(2) + (a[2] - c[2]).powi(2)).sqrt();
+                let bb =
+                    ((b[0] - c[0]).powi(2) + (b[1] - c[1]).powi(2) + (b[2] - c[2]).powi(2)).sqrt();
+
+                aa.partial_cmp(&bb).unwrap()
+            })
+            .unwrap()
+    }
+}
+
+impl image::imageops::ColorMap for Palette {
+    type Color = image::Rgb<u8>;
+
+    fn index_of(&self, color: &Self::Color) -> usize {
+        let (index, _) = self.find_closest(color);
+
+        index
+    }
+
+    fn map_color(&self, color: &mut Self::Color) {
+        let (_, closest_color) = self.find_closest(color);
+
+        *color = *closest_color;
     }
 }

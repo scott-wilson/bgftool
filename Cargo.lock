@@ -157,6 +157,7 @@ dependencies = [
  "color-eyre",
  "flate2",
  "image",
+ "rayon",
  "serde",
  "serde_json",
 ]

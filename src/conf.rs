@@ -22,9 +22,12 @@ impl From<crate::bgf::Hotspot> for Hotspot {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub enum BitmapData {
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum BitmapDataCompression {
+    #[default]
+    #[serde(rename = "none")]
     Uncompressed,
+    #[serde(rename = "zlib")]
     ZlibCompressed,
 }
 
@@ -33,15 +36,15 @@ pub struct Bitmap {
     pub size: (i32, i32),
     pub offset: (i32, i32),
     pub hotspots: Vec<Hotspot>,
-    pub compression: BitmapData,
+    pub compression: BitmapDataCompression,
     pub path: std::path::PathBuf,
 }
 
 impl From<crate::bgf::Bitmap> for Bitmap {
     fn from(value: crate::bgf::Bitmap) -> Self {
         let compression = match value.data {
-            crate::bgf::BitmapData::Uncompressed(_) => BitmapData::Uncompressed,
-            crate::bgf::BitmapData::ZlibCompressed(_) => BitmapData::ZlibCompressed,
+            crate::bgf::BitmapData::Uncompressed(_) => BitmapDataCompression::Uncompressed,
+            crate::bgf::BitmapData::ZlibCompressed(_) => BitmapDataCompression::ZlibCompressed,
         };
 
         Self {
