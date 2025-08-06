@@ -307,10 +307,18 @@ impl Hotspot {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
+pub enum DitherOptions {
+    #[default]
+    None,
+    BlueNoise,
+}
+
 #[derive(Debug, Default)]
 pub struct BitmapImageOptions {
     pub compression: crate::conf::BitmapDataCompression,
     pub transparency_clip: f32,
+    pub dither: DitherOptions,
 }
 
 #[derive(Debug)]
@@ -474,42 +482,47 @@ impl Bitmap {
         let height = img.height();
         let palette = Palette::new();
         let (transparent_index, transparent_color) = palette.transparent_color();
+        let transparent_color_f = image::Rgb([
+            byte_to_float(transparent_color[0]),
+            byte_to_float(transparent_color[1]),
+            byte_to_float(transparent_color[2]),
+        ]);
 
-        let buf = match img {
-            image::DynamicImage::ImageRgb8(image_buffer) => {
-                let mut buf =
-                    Vec::with_capacity((image_buffer.width() * image_buffer.height()) as usize);
+        let image_buffer = img.into_rgba32f();
+        let blue_noise_generator: R2BlueNoiseGenerator<4> = R2BlueNoiseGenerator::new(0.0);
 
-                for pixel in image_buffer.pixels() {
-                    if *pixel == transparent_color {
-                        buf.push(transparent_index as u8);
-                    } else {
-                        let color_index = palette.index_of(&pixel.to_rgb());
-                        buf.push(color_index as u8);
+        let buf = image_buffer
+            .par_pixels()
+            .enumerate()
+            .map(|(index, pixel)| {
+                let pixel = match options.dither {
+                    DitherOptions::None => *pixel,
+                    DitherOptions::BlueNoise => {
+                        let noise = blue_noise_generator.from_index(index);
+                        let mut pixel = pixel.0;
+                        pixel
+                            .iter_mut()
+                            .enumerate()
+                            .for_each(|(i, v)| *v += *v * noise[i]);
+
+                        image::Rgba(pixel)
                     }
+                };
+
+                if pixel[3] < options.transparency_clip || pixel.to_rgb() == transparent_color_f {
+                    transparent_index as u8
+                } else {
+                    let color_f = pixel.to_rgb();
+                    let color = image::Rgb([
+                        float_to_byte(color_f[0]),
+                        float_to_byte(color_f[1]),
+                        float_to_byte(color_f[2]),
+                    ]);
+                    let color_index = palette.index_of(&color);
+                    color_index as u8
                 }
-
-                buf
-            }
-            image::DynamicImage::ImageRgba8(image_buffer) => {
-                let mut buf =
-                    Vec::with_capacity((image_buffer.width() * image_buffer.height()) as usize);
-
-                for pixel in image_buffer.pixels() {
-                    let a = pixel[3] as f32 / 255.0;
-
-                    if a < options.transparency_clip {
-                        buf.push(transparent_index as u8);
-                    } else {
-                        let color_index = palette.index_of(&pixel.to_rgb());
-                        buf.push(color_index as u8);
-                    }
-                }
-
-                buf
-            }
-            _ => return Err(eyre::eyre!("Unsupported image type.")),
-        };
+            })
+            .collect::<Vec<_>>();
 
         let data = match options.compression {
             crate::conf::BitmapDataCompression::Uncompressed => BitmapData::Uncompressed(buf),
@@ -749,5 +762,70 @@ impl image::imageops::ColorMap for Palette {
         let (_, closest_color) = self.find_closest(color);
 
         *color = *closest_color;
+    }
+}
+
+#[inline(always)]
+fn float_to_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0) as u8
+}
+
+#[inline(always)]
+fn byte_to_float(value: u8) -> f32 {
+    (value as f32) / 255.0
+}
+
+#[inline(always)]
+fn phi(d: usize) -> f64 {
+    let mut x = 2.0;
+
+    for _ in 0..10 {
+        x = (1.0f64 + x).powf(1.0 / (d + 1) as f64)
+    }
+
+    x
+}
+
+struct R2BlueNoiseGenerator<const N: usize> {
+    seed: f64,
+    alpha: [f64; N],
+    index: usize,
+}
+
+impl<const N: usize> R2BlueNoiseGenerator<N> {
+    pub fn new(seed: f64) -> Self {
+        let g = phi(N);
+        let index = 0;
+        let mut alpha = [0.0; N];
+
+        alpha
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, v)| *v = ((1.0 / g).powi(i as i32 + 1)).fract());
+
+        Self { seed, alpha, index }
+    }
+
+    pub fn from_index(&self, index: usize) -> [f32; N] {
+        let mut next_value = [0.0; N];
+
+        next_value
+            .iter_mut()
+            .zip(self.alpha)
+            .for_each(|(v, a)| *v = (self.seed + a * (index + 1) as f64).fract() as f32);
+
+        next_value
+    }
+}
+
+impl<const N: usize> Iterator for R2BlueNoiseGenerator<N> {
+    type Item = [f32; N];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next_value = self.from_index(self.index);
+
+        self.index += 1;
+
+        Some(next_value)
     }
 }

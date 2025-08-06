@@ -24,6 +24,10 @@ enum Commands {
         input_conf: std::path::PathBuf,
         #[arg(long)]
         output_bgf: std::path::PathBuf,
+        #[arg(long, default_value = "none")]
+        dither: bgftool::bgf::DitherOptions,
+        #[arg(long, default_value = "0.5")]
+        transparency: f32,
     },
 }
 
@@ -41,7 +45,9 @@ fn main() -> Result<()> {
         Commands::Compile {
             input_conf,
             output_bgf,
-        } => compile(&input_conf, &output_bgf)?,
+            dither,
+            transparency,
+        } => compile(&input_conf, &output_bgf, dither, transparency)?,
     }
 
     Ok(())
@@ -74,7 +80,12 @@ fn decompile(
     Ok(())
 }
 
-fn compile(input_conf: &std::path::Path, output_bgf: &std::path::Path) -> Result<()> {
+fn compile(
+    input_conf: &std::path::Path,
+    output_bgf: &std::path::Path,
+    dither: bgftool::bgf::DitherOptions,
+    transparency: f32,
+) -> Result<()> {
     let input_conf = input_conf.canonicalize()?;
     let input_conf_dir = input_conf.parent().unwrap();
     let conf: bgftool::conf::Bgf = serde_json::from_reader(std::fs::File::open(&input_conf)?)?;
@@ -86,7 +97,8 @@ fn compile(input_conf: &std::path::Path, output_bgf: &std::path::Path) -> Result
             let bitmap_path = input_conf_dir.join(bitmap_conf.path);
             let options = bgftool::bgf::BitmapImageOptions {
                 compression: bitmap_conf.compression,
-                transparency_clip: 0.5,
+                transparency_clip: transparency,
+                dither,
             };
             let mut bitmap = bgftool::bgf::Bitmap::from_image(bitmap_path, &options)?;
             bitmap.offset = bitmap_conf.offset;
