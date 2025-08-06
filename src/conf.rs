@@ -76,7 +76,6 @@ pub struct Bgf {
     pub name: String,
     pub bitmaps: Vec<Bitmap>,
     pub index_groups: Vec<Group>,
-    pub max_indices: i32,
     pub shrink_factor: i32,
 }
 
@@ -87,7 +86,6 @@ impl From<crate::bgf::Bgf> for Bgf {
             name: value.name,
             bitmaps: value.bitmaps.into_iter().map(|b| b.into()).collect(),
             index_groups: value.index_groups.into_iter().map(|g| g.into()).collect(),
-            max_indices: value.max_indices,
             shrink_factor: value.shrink_factor,
         }
     }

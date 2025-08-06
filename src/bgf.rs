@@ -587,7 +587,6 @@ pub struct Bgf {
     pub name: String,
     pub bitmaps: Vec<Bitmap>,
     pub index_groups: Vec<Group>,
-    pub max_indices: i32,
     pub shrink_factor: i32,
 }
 
@@ -621,11 +620,6 @@ impl Bgf {
         reader.read_exact(&mut index_group_count_bytes)?;
         let index_group_count = i32::from_ne_bytes(index_group_count_bytes);
 
-        // Extract max number of indices in a group
-        let mut max_indices_count_bytes = [0u8; 4];
-        reader.read_exact(&mut max_indices_count_bytes)?;
-        let max_indices = i32::from_ne_bytes(max_indices_count_bytes);
-
         // Extract shrink factor
         let mut shrink_factor_bytes = [0u8; 4];
         reader.read_exact(&mut shrink_factor_bytes)?;
@@ -650,7 +644,6 @@ impl Bgf {
             name,
             bitmaps,
             index_groups,
-            max_indices,
             shrink_factor,
         })
     }

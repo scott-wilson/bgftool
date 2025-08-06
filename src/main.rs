@@ -129,7 +129,6 @@ fn compile(
             .into_iter()
             .map(|g| bgftool::bgf::Group { indices: g.indices })
             .collect(),
-        max_indices: conf.max_indices,
         shrink_factor: conf.shrink_factor,
     };
     bgf.write(std::fs::File::create(output_bgf)?)?;
