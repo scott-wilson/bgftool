@@ -25,7 +25,7 @@ enum Commands {
         #[arg(long)]
         output_bgf: std::path::PathBuf,
         #[arg(long, default_value = "none")]
-        dither: bgftool::bgf::DitherOptions,
+        dither: bgftool::dither::DitherOptions,
         #[arg(long, default_value = "0.5")]
         transparency: f32,
     },
@@ -83,7 +83,7 @@ fn decompile(
 fn compile(
     input_conf: &std::path::Path,
     output_bgf: &std::path::Path,
-    dither: bgftool::bgf::DitherOptions,
+    dither: bgftool::dither::DitherOptions,
     transparency: f32,
 ) -> Result<()> {
     let input_conf = input_conf.canonicalize()?;
