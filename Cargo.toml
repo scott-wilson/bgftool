@@ -8,6 +8,8 @@ clap = { version = "4.5.42", features = ["derive"] }
 color-eyre = "0.6.5"
 flate2 = { version = "1.1.2", default-features = false, features = ["zlib-rs"] }
 image = "0.25.6"
+rand = { version = "0.9.2", default-features = false }
+rand_pcg = "0.9.0"
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"

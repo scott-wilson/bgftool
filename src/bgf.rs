@@ -1,7 +1,6 @@
 use std::{io::prelude::*, str::FromStr};
 
 use color_eyre::eyre::{self, Ok, Result};
-use image::{Pixel, imageops::ColorMap};
 use rayon::prelude::*;
 
 const MAGIC_NUMBER: &[u8] = b"BGF\x11";
@@ -307,18 +306,11 @@ impl Hotspot {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
-pub enum DitherOptions {
-    #[default]
-    None,
-    BlueNoise,
-}
-
 #[derive(Debug, Default)]
 pub struct BitmapImageOptions {
     pub compression: crate::conf::BitmapDataCompression,
     pub transparency_clip: f32,
-    pub dither: DitherOptions,
+    pub dither: crate::dither::DitherOptions,
 }
 
 #[derive(Debug)]
@@ -337,7 +329,7 @@ impl BitmapData {
         // Extract data length
         let mut data_len_bytes = [0u8; 4];
         reader.read_exact(&mut data_len_bytes)?;
-        let data_len = u32::from_ne_bytes(data_len_bytes);
+        let data_len = i32::from_ne_bytes(data_len_bytes);
 
         let mut raw_data = vec![0u8; data_len as usize];
         reader.read_exact(&mut raw_data)?;
@@ -352,19 +344,14 @@ impl BitmapData {
     }
 
     pub fn write<W: Write>(&self, mut writer: W) -> Result<()> {
-        let data = match self {
-            Self::Uncompressed(items) => {
-                writer.write_all(&0u8.to_ne_bytes())?;
-                items
-            }
-            Self::ZlibCompressed(items) => {
-                writer.write_all(&1u8.to_ne_bytes())?;
-                items
-            }
+        let (compression, data) = match self {
+            Self::Uncompressed(items) => (0u8, items),
+            Self::ZlibCompressed(items) => (1u8, items),
         };
 
+        writer.write_all(&compression.to_ne_bytes())?;
         writer.write_all(&(data.len() as i32).to_ne_bytes())?;
-        writer.write_all(&data)?;
+        writer.write_all(data)?;
 
         Ok(())
     }
@@ -481,54 +468,39 @@ impl Bitmap {
         let width = img.width();
         let height = img.height();
         let palette = Palette::new();
-        let (transparent_index, transparent_color) = palette.transparent_color();
-        let transparent_color_f = image::Rgb([
-            byte_to_float(transparent_color[0]),
-            byte_to_float(transparent_color[1]),
-            byte_to_float(transparent_color[2]),
-        ]);
 
         let image_buffer = img.into_rgba32f();
-        let blue_noise_generator: R2BlueNoiseGenerator<4> = R2BlueNoiseGenerator::new(0.0);
 
-        let buf = image_buffer
-            .par_pixels()
-            .enumerate()
-            .map(|(index, pixel)| {
-                let pixel = match options.dither {
-                    DitherOptions::None => *pixel,
-                    DitherOptions::BlueNoise => {
-                        let noise = blue_noise_generator.from_index(index);
-                        let mut pixel = pixel.0;
-                        pixel
-                            .iter_mut()
-                            .enumerate()
-                            .for_each(|(i, v)| *v += *v * noise[i]);
+        let generator = match options.dither {
+            crate::dither::DitherOptions::None => crate::dither::DitherGenerator::new_none(),
+            crate::dither::DitherOptions::R2 => crate::dither::DitherGenerator::new_r2(0.0),
+            crate::dither::DitherOptions::Pcg => {
+                crate::dither::DitherGenerator::new_pcg(0, (width * height) as usize)
+            }
+            crate::dither::DitherOptions::FloydSteinberg => {
+                crate::dither::DitherGenerator::new_floyd_steinberg()
+            }
+            crate::dither::DitherOptions::JavisJudiceNinke => {
+                crate::dither::DitherGenerator::new_javis_judice_ninke()
+            }
+            crate::dither::DitherOptions::Stucki => crate::dither::DitherGenerator::new_stucki(),
+            crate::dither::DitherOptions::Atkinson => {
+                crate::dither::DitherGenerator::new_atkinson()
+            }
+            crate::dither::DitherOptions::Burkes => crate::dither::DitherGenerator::new_burkes(),
+            crate::dither::DitherOptions::Sierra => crate::dither::DitherGenerator::new_sierra(),
+            crate::dither::DitherOptions::TwoRowSierra => {
+                crate::dither::DitherGenerator::new_two_row_sierra()
+            }
+            crate::dither::DitherOptions::SierraLite => {
+                crate::dither::DitherGenerator::new_sierra_lite()
+            }
+        };
 
-                        image::Rgba(pixel)
-                    }
-                };
-
-                if pixel[3] < options.transparency_clip || pixel.to_rgb() == transparent_color_f {
-                    transparent_index as u8
-                } else {
-                    let color_f = pixel.to_rgb();
-                    let color = image::Rgb([
-                        float_to_byte(color_f[0]),
-                        float_to_byte(color_f[1]),
-                        float_to_byte(color_f[2]),
-                    ]);
-                    let color_index = palette.index_of(&color);
-                    color_index as u8
-                }
-            })
-            .collect::<Vec<_>>();
-
+        let buf = generator.dither(&image_buffer, options, &palette);
         let data = match options.compression {
             crate::conf::BitmapDataCompression::Uncompressed => BitmapData::Uncompressed(buf),
             crate::conf::BitmapDataCompression::ZlibCompressed => {
-                let buf = buf;
-
                 let mut encoder =
                     flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
                 encoder.write_all(&buf)?;
@@ -595,7 +567,7 @@ impl Bgf {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic)?;
 
-        if &magic != MAGIC_NUMBER {
+        if magic != MAGIC_NUMBER {
             return Err(eyre::eyre!("Magic number is invalid."));
         }
 
@@ -620,6 +592,11 @@ impl Bgf {
         reader.read_exact(&mut index_group_count_bytes)?;
         let index_group_count = i32::from_ne_bytes(index_group_count_bytes);
 
+        // Extract max number of indices in a group
+        let mut max_indices_count_bytes = [0u8; 4];
+        reader.read_exact(&mut max_indices_count_bytes)?;
+        let max_indices = i32::from_ne_bytes(max_indices_count_bytes);
+
         // Extract shrink factor
         let mut shrink_factor_bytes = [0u8; 4];
         reader.read_exact(&mut shrink_factor_bytes)?;
@@ -636,7 +613,16 @@ impl Bgf {
         let mut index_groups = Vec::with_capacity(index_group_count as usize);
 
         for _ in 0..index_group_count {
-            index_groups.push(Group::read(&mut reader)?);
+            let index_group = Group::read(&mut reader)?;
+            for index in &index_group.indices {
+                if *index > max_indices {
+                    return Err(eyre::eyre!(
+                        "Found index that is greater than the max indices."
+                    ));
+                }
+            }
+
+            index_groups.push(index_group);
         }
 
         Ok(Self {
@@ -650,7 +636,7 @@ impl Bgf {
 
     pub fn write<W: Write>(&self, mut writer: W) -> Result<()> {
         // Write magic number
-        writer.write_all(&MAGIC_NUMBER)?;
+        writer.write_all(MAGIC_NUMBER)?;
 
         // Write version
         writer.write_all(&CURRENT_BGF_VERSION.to_ne_bytes())?;
@@ -676,10 +662,12 @@ impl Bgf {
         writer.write_all(&(self.index_groups.len() as i32).to_ne_bytes())?;
 
         // Find most indices in a group
-        let max_indices = match self.index_groups.iter().map(|i| i.indices.len()).max() {
-            Some(i) => i,
-            None => 0,
-        };
+        let max_indices = self
+            .index_groups
+            .iter()
+            .map(|i| i.indices.len())
+            .max()
+            .unwrap_or_default();
         writer.write_all(&(max_indices as i32).to_ne_bytes())?;
 
         // Write shrink factor
@@ -703,6 +691,12 @@ pub struct Palette {
     values: &'static [image::Rgb<u8>],
 }
 
+impl Default for Palette {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Palette {
     pub fn new() -> Self {
         static CACHED_PALETTE: std::sync::LazyLock<Vec<image::Rgb<u8>>> =
@@ -718,10 +712,10 @@ impl Palette {
     }
 
     pub fn values(&self) -> &[image::Rgb<u8>] {
-        &self.values
+        self.values
     }
 
-    fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
+    pub fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
         self.values
             .par_iter()
             .enumerate()
@@ -755,70 +749,5 @@ impl image::imageops::ColorMap for Palette {
         let (_, closest_color) = self.find_closest(color);
 
         *color = *closest_color;
-    }
-}
-
-#[inline(always)]
-fn float_to_byte(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0) as u8
-}
-
-#[inline(always)]
-fn byte_to_float(value: u8) -> f32 {
-    (value as f32) / 255.0
-}
-
-#[inline(always)]
-fn phi(d: usize) -> f64 {
-    let mut x = 2.0;
-
-    for _ in 0..10 {
-        x = (1.0f64 + x).powf(1.0 / (d + 1) as f64)
-    }
-
-    x
-}
-
-struct R2BlueNoiseGenerator<const N: usize> {
-    seed: f64,
-    alpha: [f64; N],
-    index: usize,
-}
-
-impl<const N: usize> R2BlueNoiseGenerator<N> {
-    pub fn new(seed: f64) -> Self {
-        let g = phi(N);
-        let index = 0;
-        let mut alpha = [0.0; N];
-
-        alpha
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, v)| *v = ((1.0 / g).powi(i as i32 + 1)).fract());
-
-        Self { seed, alpha, index }
-    }
-
-    pub fn from_index(&self, index: usize) -> [f32; N] {
-        let mut next_value = [0.0; N];
-
-        next_value
-            .iter_mut()
-            .zip(self.alpha)
-            .for_each(|(v, a)| *v = (self.seed + a * (index + 1) as f64).fract() as f32);
-
-        next_value
-    }
-}
-
-impl<const N: usize> Iterator for R2BlueNoiseGenerator<N> {
-    type Item = [f32; N];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next_value = self.from_index(self.index);
-
-        self.index += 1;
-
-        Some(next_value)
     }
 }
