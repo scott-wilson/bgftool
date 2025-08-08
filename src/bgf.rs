@@ -469,12 +469,6 @@ impl Bitmap {
         let width = img.width();
         let height = img.height();
         let palette = Palette::new();
-        let (transparent_index, transparent_color) = palette.transparent_color();
-        let transparent_color_f = image::Rgb([
-            byte_to_float(transparent_color[0]),
-            byte_to_float(transparent_color[1]),
-            byte_to_float(transparent_color[2]),
-        ]);
 
         let image_buffer = img.into_rgba32f();
 
@@ -484,38 +478,27 @@ impl Bitmap {
             crate::dither::DitherOptions::Pcg => {
                 crate::dither::DitherGenerator::new_pcg(0, (width * height) as usize)
             }
+            crate::dither::DitherOptions::FloydSteinberg => {
+                crate::dither::DitherGenerator::new_floyd_steinberg()
+            }
+            crate::dither::DitherOptions::JavisJudiceNinke => {
+                crate::dither::DitherGenerator::new_javis_judice_ninke()
+            }
+            crate::dither::DitherOptions::Stucki => crate::dither::DitherGenerator::new_stucki(),
+            crate::dither::DitherOptions::Atkinson => {
+                crate::dither::DitherGenerator::new_atkinson()
+            }
+            crate::dither::DitherOptions::Burkes => crate::dither::DitherGenerator::new_burkes(),
+            crate::dither::DitherOptions::Sierra => crate::dither::DitherGenerator::new_sierra(),
+            crate::dither::DitherOptions::TwoRowSierra => {
+                crate::dither::DitherGenerator::new_two_row_sierra()
+            }
+            crate::dither::DitherOptions::SierraLite => {
+                crate::dither::DitherGenerator::new_sierra_lite()
+            }
         };
 
-        let buf = image_buffer
-            .par_pixels()
-            .enumerate()
-            .map(|(index, pixel)| {
-                let noise: [f32; 4] = generator.from_index(index);
-                let pixel = {
-                    let mut pixel = pixel.0;
-                    pixel
-                        .iter_mut()
-                        .enumerate()
-                        .for_each(|(i, v)| *v += *v * noise[i]);
-
-                    image::Rgba(pixel)
-                };
-
-                if pixel[3] < options.transparency_clip || pixel.to_rgb() == transparent_color_f {
-                    transparent_index as u8
-                } else {
-                    let color_f = pixel.to_rgb();
-                    let color = image::Rgb([
-                        float_to_byte(color_f[0]),
-                        float_to_byte(color_f[1]),
-                        float_to_byte(color_f[2]),
-                    ]);
-                    let color_index = palette.index_of(&color);
-                    color_index as u8
-                }
-            })
-            .collect::<Vec<_>>();
-
+        let buf = generator.dither(&image_buffer, &options, &palette);
         let data = match options.compression {
             crate::conf::BitmapDataCompression::Uncompressed => BitmapData::Uncompressed(buf),
             crate::conf::BitmapDataCompression::ZlibCompressed => {
@@ -727,7 +710,7 @@ impl Palette {
         &self.values
     }
 
-    fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
+    pub fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
         self.values
             .par_iter()
             .enumerate()
