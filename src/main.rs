@@ -123,7 +123,7 @@ fn compile(
     let bgf = bgftool::bgf::Bgf {
         version: conf.version,
         name: conf.name,
-        bitmaps: bitmaps,
+        bitmaps,
         index_groups: conf
             .index_groups
             .into_iter()

@@ -115,27 +115,27 @@ impl DitherGenerator {
                 })
                 .collect::<Vec<_>>(),
             Self::R2(r2_blue_noise_generator) => dither_from_noise(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
-                |index| r2_blue_noise_generator.from_index(index),
+                options,
+                palette,
+                |index| r2_blue_noise_generator.get(index),
             ),
             Self::Pcg(pcg_noise_generator) => dither_from_noise(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
-                |index| pcg_noise_generator.from_index(index),
+                options,
+                palette,
+                |index| pcg_noise_generator.get(index),
             ),
             Self::FloydSteinberg => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (7.0 / 16.0, (1, 0)),
                     (3.0 / 16.0, (-1, 1)),
@@ -144,11 +144,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::JavisJudiceNinke => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (7.0 / 48.0, (1, 0)),
                     (5.0 / 48.0, (2, 0)),
@@ -165,11 +165,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::Stucki => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (8.0 / 42.0, (1, 0)),
                     (4.0 / 42.0, (2, 0)),
@@ -186,11 +186,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::Atkinson => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (1.0 / 8.0, (1, 0)),
                     (1.0 / 8.0, (2, 0)),
@@ -201,11 +201,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::Burkes => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (8.0 / 32.0, (1, 0)),
                     (4.0 / 32.0, (2, 0)),
@@ -217,11 +217,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::Sierra => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (5.0 / 32.0, (1, 0)),
                     (3.0 / 32.0, (2, 0)),
@@ -236,11 +236,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::TwoRowSierra => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (4.0 / 16.0, (1, 0)),
                     (3.0 / 16.0, (1, 0)),
@@ -252,11 +252,11 @@ impl DitherGenerator {
                 ],
             ),
             Self::SierraLite => dither_from_error_diffusion(
-                &image_buffer,
+                image_buffer,
                 transparent_color_f,
                 transparent_index,
-                &options,
-                &palette,
+                options,
+                palette,
                 &[
                     (2.0 / 4.0, (1, 0)),
                     (1.0 / 4.0, (-1, 1)),
@@ -286,8 +286,8 @@ fn propagate_error(
 ) {
     if position.0 >= size.0 as isize
         || position.1 >= size.1 as isize
-        || position.0 <= 0 as isize
-        || position.1 <= 0 as isize
+        || position.0 <= 0_isize
+        || position.1 <= 0_isize
     {
         return;
     }
@@ -355,7 +355,8 @@ fn dither_from_error_diffusion(
 ) -> Vec<u8> {
     let mut error_buf =
         vec![image::Rgba([0.0f32; 4]); (image_buffer.width() * image_buffer.height()) as usize];
-    let buf = image_buffer
+
+    image_buffer
         .pixels()
         .enumerate()
         .map(|(index, pixel)| {
@@ -412,7 +413,5 @@ fn dither_from_error_diffusion(
 
             index
         })
-        .collect();
-
-    buf
+        .collect()
 }

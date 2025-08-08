@@ -16,7 +16,7 @@ impl<const N: usize> R2BlueNoiseGenerator<N> {
         Self { seed, alpha }
     }
 
-    pub fn from_index(&self, index: usize) -> [f32; N] {
+    pub fn get(&self, index: usize) -> [f32; N] {
         let mut next_value = [0.0; N];
 
         next_value

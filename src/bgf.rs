@@ -1,7 +1,6 @@
 use std::{io::prelude::*, str::FromStr};
 
 use color_eyre::eyre::{self, Ok, Result};
-use image::{Pixel, imageops::ColorMap};
 use rayon::prelude::*;
 
 const MAGIC_NUMBER: &[u8] = b"BGF\x11";
@@ -352,7 +351,7 @@ impl BitmapData {
 
         writer.write_all(&compression.to_ne_bytes())?;
         writer.write_all(&(data.len() as i32).to_ne_bytes())?;
-        writer.write_all(&data)?;
+        writer.write_all(data)?;
 
         Ok(())
     }
@@ -498,12 +497,10 @@ impl Bitmap {
             }
         };
 
-        let buf = generator.dither(&image_buffer, &options, &palette);
+        let buf = generator.dither(&image_buffer, options, &palette);
         let data = match options.compression {
             crate::conf::BitmapDataCompression::Uncompressed => BitmapData::Uncompressed(buf),
             crate::conf::BitmapDataCompression::ZlibCompressed => {
-                let buf = buf;
-
                 let mut encoder =
                     flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
                 encoder.write_all(&buf)?;
@@ -570,7 +567,7 @@ impl Bgf {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic)?;
 
-        if &magic != MAGIC_NUMBER {
+        if magic != MAGIC_NUMBER {
             return Err(eyre::eyre!("Magic number is invalid."));
         }
 
@@ -639,7 +636,7 @@ impl Bgf {
 
     pub fn write<W: Write>(&self, mut writer: W) -> Result<()> {
         // Write magic number
-        writer.write_all(&MAGIC_NUMBER)?;
+        writer.write_all(MAGIC_NUMBER)?;
 
         // Write version
         writer.write_all(&CURRENT_BGF_VERSION.to_ne_bytes())?;
@@ -665,10 +662,12 @@ impl Bgf {
         writer.write_all(&(self.index_groups.len() as i32).to_ne_bytes())?;
 
         // Find most indices in a group
-        let max_indices = match self.index_groups.iter().map(|i| i.indices.len()).max() {
-            Some(i) => i,
-            None => 0,
-        };
+        let max_indices = self
+            .index_groups
+            .iter()
+            .map(|i| i.indices.len())
+            .max()
+            .unwrap_or_default();
         writer.write_all(&(max_indices as i32).to_ne_bytes())?;
 
         // Write shrink factor
@@ -692,6 +691,12 @@ pub struct Palette {
     values: &'static [image::Rgb<u8>],
 }
 
+impl Default for Palette {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Palette {
     pub fn new() -> Self {
         static CACHED_PALETTE: std::sync::LazyLock<Vec<image::Rgb<u8>>> =
@@ -707,7 +712,7 @@ impl Palette {
     }
 
     pub fn values(&self) -> &[image::Rgb<u8>] {
-        &self.values
+        self.values
     }
 
     pub fn find_closest(&self, color: &image::Rgb<u8>) -> (usize, &image::Rgb<u8>) {
@@ -745,14 +750,4 @@ impl image::imageops::ColorMap for Palette {
 
         *color = *closest_color;
     }
-}
-
-#[inline(always)]
-fn float_to_byte(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0) as u8
-}
-
-#[inline(always)]
-fn byte_to_float(value: u8) -> f32 {
-    (value as f32) / 255.0
 }

@@ -26,7 +26,7 @@ impl<const N: usize> PcgNoiseGenerator<N> {
         Self { samples }
     }
 
-    pub fn from_index(&self, index: usize) -> [f32; N] {
-        *&self.samples[index]
+    pub fn get(&self, index: usize) -> [f32; N] {
+        self.samples[index]
     }
 }
